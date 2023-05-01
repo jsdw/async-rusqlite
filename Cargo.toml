@@ -1,0 +1,11 @@
+[package]
+name = "async-rusqlite"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+readme = "README.md"
+description = "A tiny executor agnostic wrapper around rusqlite to make calls to it async"
+
+[dependencies]
+asyncified = "0.4"
+rusqlite = "0.29.0"
