@@ -1,3 +1,51 @@
+//! # Async-rusqlite
+//!
+//! A tiny async wrapper around [`rusqlite`]. Use [`crate::Connection`]
+//! to open a connection, and then [`crate::Connection::call()`] to
+//! execute commands against it.
+//!
+//! ```rust
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use async_rusqlite::Connection;
+//!
+//! #[derive(Debug)]
+//! struct Person {
+//!     id: i32,
+//!     name: String,
+//!     data: Option<Vec<u8>>,
+//! }
+//!
+//! let conn = Connection::open_in_memory().await?;
+//!
+//! conn.call(|conn| {
+//!     conn.execute(
+//!         "CREATE TABLE person (
+//!             id   INTEGER PRIMARY KEY,
+//!             name TEXT NOT NULL,
+//!             data BLOB
+//!         )",
+//!         (),
+//!     )
+//! }).await?;
+//!
+//! let me = Person {
+//!     id: 0,
+//!     name: "Steven".to_string(),
+//!     data: None,
+//! };
+//!
+//! conn.call(move |conn| {
+//!     conn.execute(
+//!         "INSERT INTO person (name, data) VALUES (?1, ?2)",
+//!         (&me.name, &me.data),
+//!     )
+//! }).await?;
+//!
+//! # Ok(())
+//! # }
+//! ```
+
 use asyncified::Asyncified;
 use std::path::Path;
 
@@ -181,5 +229,45 @@ impl std::error::Error for Error {
 impl From<rusqlite::Error> for Error {
     fn from(value: rusqlite::Error) -> Self {
         Error::Rusqlite(value)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_many_calls() -> Result<()> {
+        let conn = Connection::open_in_memory().await?;
+
+        conn.call(|conn| {
+            conn.execute(
+                "CREATE TABLE numbers (
+                    id   INTEGER PRIMARY KEY,
+                    num  INTEGER NOT NULL
+                )",
+                (),
+            )
+        }).await?;
+
+        for n in 0..10000 {
+            conn.call(move |conn| {
+                conn.execute(
+                    "INSERT INTO numbers (num) VALUES (?1)",
+                    (n,)
+                )
+            }).await?;
+        }
+
+        let count: usize = conn.call(|conn| {
+            conn.query_row(
+                "SELECT count(num) FROM numbers",
+                (),
+                |r| r.get(0)
+            )
+        }).await?;
+
+        assert_eq!(count, 10000);
+        Ok(())
     }
 }
