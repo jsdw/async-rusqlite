@@ -52,9 +52,6 @@ use std::path::Path;
 // re-export rusqlite types.
 pub use rusqlite;
 
-/// A result returned from calls to [`Connection`].
-pub type Result<T> = std::result::Result<T, Error>;
-
 /// A handle which allows access to the underlying [`rusqlite::Connection`]
 /// via [`Connection::call()`].
 #[derive(Debug, Clone)]
@@ -71,7 +68,7 @@ impl Connection {
     ///
     /// Will return `Err` if `path` cannot be converted to a C-compatible string
     /// or if the underlying SQLite open call fails.
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Connection> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
         let conn = Asyncified::new(move || rusqlite::Connection::open(path).map(Some)).await?;
         Ok(Connection { conn })
@@ -82,7 +79,7 @@ impl Connection {
     /// # Failure
     ///
     /// Will return `Err` if the underlying SQLite open call fails.
-    pub async fn open_in_memory() -> Result<Connection> {
+    pub async fn open_in_memory() -> Result<Connection,rusqlite::Error> {
         let conn = Asyncified::new(|| rusqlite::Connection::open_in_memory().map(Some)).await?;
         Ok(Connection { conn })
     }
@@ -96,7 +93,7 @@ impl Connection {
     ///
     /// Will return `Err` if `path` cannot be converted to a C-compatible
     /// string or if the underlying SQLite open call fails.
-    pub async fn open_with_flags<P: AsRef<Path>>(path: P, flags: rusqlite::OpenFlags) -> Result<Connection> {
+    pub async fn open_with_flags<P: AsRef<Path>>(path: P, flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
         let conn = Asyncified::new(move || rusqlite::Connection::open_with_flags(path, flags).map(Some)).await?;
         Ok(Connection { conn })
@@ -116,7 +113,7 @@ impl Connection {
         path: P,
         flags: rusqlite::OpenFlags,
         vfs: &str,
-    ) -> Result<Connection> {
+    ) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
         let vfs = vfs.to_owned();
         let conn = Asyncified::new(move || rusqlite::Connection::open_with_flags_and_vfs(path, flags, &vfs).map(Some)).await?;
@@ -131,7 +128,7 @@ impl Connection {
     /// # Failure
     ///
     /// Will return `Err` if the underlying SQLite open call fails.
-    pub async fn open_in_memory_with_flags(flags: rusqlite::OpenFlags) -> Result<Connection> {
+    pub async fn open_in_memory_with_flags(flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
         Connection::open_with_flags(":memory:", flags).await
     }
 
@@ -145,7 +142,7 @@ impl Connection {
     ///
     /// Will return `Err` if `vfs` cannot be converted to a C-compatible
     /// string or if the underlying SQLite open call fails.
-    pub async fn open_in_memory_with_flags_and_vfs(flags: rusqlite::OpenFlags, vfs: &str) -> Result<Connection> {
+    pub async fn open_in_memory_with_flags_and_vfs(flags: rusqlite::OpenFlags, vfs: &str) -> Result<Connection,rusqlite::Error> {
         Connection::open_with_flags_and_vfs(":memory:", flags, vfs).await
     }
 
@@ -159,7 +156,7 @@ impl Connection {
     /// # Failure
     ///
     /// Will return `Err` if the underlying SQLite call fails.
-    pub async fn close(&self) -> Result<()> {
+    pub async fn close(&self) -> Result<(),Error> {
         self.conn.call(|conn| {
             match conn.take() {
                 Some(c) => {
@@ -174,7 +171,7 @@ impl Connection {
                     }
                 },
                 // Already closed!
-                None => Err(Error::ConnectionClosed)
+                None => Err(Error::AlreadyClosed)
             }
         }).await
     }
@@ -184,34 +181,55 @@ impl Connection {
     /// # Failure
     ///
     /// Will return Err if the connection is closed, or if the provided function returns an error.
-    pub async fn call<R, F>(&self, f: F) -> Result<R>
+    /// The error type must impl [`From<AlreadyClosed>`] to handle this possibility being emitted.
+    pub async fn call<R, E, F>(&self, f: F) -> Result<R,E>
     where
         R: Send + 'static,
-        F: Send + 'static + FnOnce(&mut rusqlite::Connection) -> rusqlite::Result<R>
+        E: Send + 'static + From<AlreadyClosed>,
+        F: Send + 'static + FnOnce(&mut rusqlite::Connection) -> Result<R, E>
     {
         self.conn.call(|conn| {
             match conn {
                 Some(conn) => Ok(f(conn)?),
-                None => Err(Error::ConnectionClosed)
+                None => Err(AlreadyClosed.into())
             }
         }).await
     }
 }
 
-/// Errors that can be emitted from this library.
-#[derive(Debug)]
+/// If the connection is already closed, this will be returned
+/// for the user to convert into their own error type. This can be
+/// converted into [`Error`] and [`rusqlite::Error`] so that either
+/// can be returned in the [`Connection::call()`] function.
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+pub struct AlreadyClosed;
+
+impl From<AlreadyClosed> for rusqlite::Error {
+    fn from(_: AlreadyClosed) -> Self {
+        // There's not an ideal match for this error, so
+        // just output something that is sortof sensible:
+        let e = rusqlite::ffi::Error {
+            code: rusqlite::ffi::ErrorCode::CannotOpen,
+            extended_code: rusqlite::ffi::SQLITE_CANTOPEN
+        };
+        rusqlite::Error::SqliteFailure(e, None)
+    }
+}
+
+/// An error emitted if closing the connection fails.
+#[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Error {
-    /// The connection to SQLite has been closed.
-    ConnectionClosed,
-    /// A `rusqlite` error occured.
+    /// The connection to SQLite has already been closed.
+    AlreadyClosed,
+    /// A `rusqlite` error occured trying to close the connection.
     Rusqlite(rusqlite::Error),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ConnectionClosed => write!(f, "Connection closed"),
+            Error::AlreadyClosed => write!(f, "The connection has already been closed"),
             Error::Rusqlite(e) => write!(f, "Rusqlite error: {e}"),
         }
     }
@@ -220,7 +238,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::ConnectionClosed => None,
+            Error::AlreadyClosed => None,
             Error::Rusqlite(e) => Some(e),
         }
     }
@@ -232,12 +250,18 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+impl From<AlreadyClosed> for Error {
+    fn from(_: AlreadyClosed) -> Self {
+        Error::AlreadyClosed
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[tokio::test]
-    async fn test_many_calls() -> Result<()> {
+    async fn test_many_calls() -> Result<(), Error> {
         let conn = Connection::open_in_memory().await?;
 
         conn.call(|conn| {
@@ -269,5 +293,59 @@ mod test {
 
         assert_eq!(count, 10000);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn closes_once() {
+        let conn = Connection::open_in_memory().await.unwrap();
+
+        conn.close().await.expect("should close ok first time");
+        let err = conn.close().await.expect_err("should error second time");
+
+        assert_eq!(err, Error::AlreadyClosed);
+    }
+
+    #[tokio::test]
+    async fn cant_call_after_close() {
+        let conn = Connection::open_in_memory().await.unwrap();
+
+        conn.close().await.expect("should close ok");
+        let err = conn
+            .call(|_conn| Ok::<_,Error>(()))
+            .await
+            .expect_err("should error second time");
+
+        assert_eq!(err, Error::AlreadyClosed);
+    }
+
+    #[tokio::test]
+    async fn custom_call_error() {
+        // Custom error type that can capture possibility
+        // of connection being closed.
+        #[derive(Debug,PartialEq)]
+        pub enum MyErr { AlreadyClosed, Other(&'static str) }
+        impl From<AlreadyClosed> for MyErr {
+            fn from(_: AlreadyClosed) -> MyErr {
+                MyErr::AlreadyClosed
+            }
+        }
+
+        let conn = Connection::open_in_memory().await.unwrap();
+
+        let err = conn
+            .call(|_conn| Err::<(),_>(MyErr::Other("foo")))
+            .await
+            .expect_err("should error");
+
+        assert_eq!(err, MyErr::Other("foo"));
+
+        conn.close().await.unwrap();
+
+        let err = conn
+            .call(|_conn| Ok::<_,MyErr>(()))
+            .await
+            .expect_err("should error");
+
+        assert_eq!(err, MyErr::AlreadyClosed);
     }
 }
