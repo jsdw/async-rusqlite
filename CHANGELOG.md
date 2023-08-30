@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Add ConnectionBuilder and move less common open calls to that, as well as exposing some other configuration from the underlying `Asyncified` instance (notably an `on_close` handler, to allow reacting to the db being closed).
+
 ## 0.3.0
 
 - More precise error types:

@@ -46,21 +46,51 @@
 //! # }
 //! ```
 
-use asyncified::Asyncified;
+use asyncified::{ Asyncified, AsyncifiedBuilder };
 use std::path::Path;
 
 // re-export rusqlite types.
 pub use rusqlite;
 
-/// A handle which allows access to the underlying [`rusqlite::Connection`]
-/// via [`Connection::call()`].
-#[derive(Debug, Clone)]
-pub struct Connection {
-    // None if connection is closed, else Some(connection).
-    conn: Asyncified<Option<rusqlite::Connection>>
+pub struct ConnectionBuilder {
+    asyncified_builder: AsyncifiedBuilder<Option<rusqlite::Connection>>
 }
 
-impl Connection {
+impl std::default::Default for ConnectionBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConnectionBuilder {
+    /// Configure and build a new [`Connection`].
+    pub fn new() -> Self {
+        Self {
+            asyncified_builder: AsyncifiedBuilder::new()
+        }
+    }
+
+    /// Configure the thread that the database connection will live on.
+    pub fn thread_builder(mut self, thread: std::thread::Builder) -> Self {
+        self.asyncified_builder = self.asyncified_builder.thread_builder(thread);
+        self
+    }
+
+    /// Configure how many functions can be queued to run on our connection
+    /// before `conn.call(..).await` will wait and backpressure will kick in.
+    pub fn channel_size(mut self, size: usize) -> Self {
+        self.asyncified_builder = self.asyncified_builder.channel_size(size);
+        self
+    }
+
+    /// Configure a function to be called exactly once when the connection is closed.
+    /// If the database has already been closed then it will be given `None`, else it
+    /// will be handed the database connection.
+    pub fn on_close<F: FnOnce(Option<rusqlite::Connection>) + Send + 'static>(mut self, f: F) -> Self {
+        self.asyncified_builder = self.asyncified_builder.on_close(move |o| f(o.take()));
+        self
+    }
+
     /// Open a new connection to an SQLite database. If a database does not exist at the
     /// path, one is created.
     ///
@@ -68,9 +98,11 @@ impl Connection {
     ///
     /// Will return `Err` if `path` cannot be converted to a C-compatible string
     /// or if the underlying SQLite open call fails.
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Connection,rusqlite::Error> {
+    pub async fn open<P: AsRef<Path>>(self, path: P) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
-        let conn = Asyncified::new(move || rusqlite::Connection::open(path).map(Some)).await?;
+        let conn = self.asyncified_builder
+            .build(move || rusqlite::Connection::open(path).map(Some))
+            .await?;
         Ok(Connection { conn })
     }
 
@@ -79,8 +111,10 @@ impl Connection {
     /// # Failure
     ///
     /// Will return `Err` if the underlying SQLite open call fails.
-    pub async fn open_in_memory() -> Result<Connection,rusqlite::Error> {
-        let conn = Asyncified::new(|| rusqlite::Connection::open_in_memory().map(Some)).await?;
+    pub async fn open_in_memory(self) -> Result<Connection,rusqlite::Error> {
+        let conn = self.asyncified_builder
+            .build(|| rusqlite::Connection::open_in_memory().map(Some))
+            .await?;
         Ok(Connection { conn })
     }
 
@@ -93,9 +127,12 @@ impl Connection {
     ///
     /// Will return `Err` if `path` cannot be converted to a C-compatible
     /// string or if the underlying SQLite open call fails.
-    pub async fn open_with_flags<P: AsRef<Path>>(path: P, flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
+    pub async fn open_with_flags<P: AsRef<Path>>(self, path: P, flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
-        let conn = Asyncified::new(move || rusqlite::Connection::open_with_flags(path, flags).map(Some)).await?;
+        let conn = self
+            .asyncified_builder
+            .build(move || rusqlite::Connection::open_with_flags(path, flags).map(Some))
+            .await?;
         Ok(Connection { conn })
     }
 
@@ -110,13 +147,16 @@ impl Connection {
     /// Will return `Err` if either `path` or `vfs` cannot be converted to a
     /// C-compatible string or if the underlying SQLite open call fails.
     pub async fn open_with_flags_and_vfs<P: AsRef<Path>>(
+        self,
         path: P,
         flags: rusqlite::OpenFlags,
         vfs: &str,
     ) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
         let vfs = vfs.to_owned();
-        let conn = Asyncified::new(move || rusqlite::Connection::open_with_flags_and_vfs(path, flags, &vfs).map(Some)).await?;
+        let conn = self.asyncified_builder
+            .build(move || rusqlite::Connection::open_with_flags_and_vfs(path, flags, &vfs).map(Some))
+            .await?;
         Ok(Connection { conn })
     }
 
@@ -128,8 +168,8 @@ impl Connection {
     /// # Failure
     ///
     /// Will return `Err` if the underlying SQLite open call fails.
-    pub async fn open_in_memory_with_flags(flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
-        Connection::open_with_flags(":memory:", flags).await
+    pub async fn open_in_memory_with_flags(self, flags: rusqlite::OpenFlags) -> Result<Connection,rusqlite::Error> {
+        self.open_with_flags(":memory:", flags).await
     }
 
     /// Open a new connection to an in-memory SQLite database using the specific
@@ -142,8 +182,43 @@ impl Connection {
     ///
     /// Will return `Err` if `vfs` cannot be converted to a C-compatible
     /// string or if the underlying SQLite open call fails.
-    pub async fn open_in_memory_with_flags_and_vfs(flags: rusqlite::OpenFlags, vfs: &str) -> Result<Connection,rusqlite::Error> {
-        Connection::open_with_flags_and_vfs(":memory:", flags, vfs).await
+    pub async fn open_in_memory_with_flags_and_vfs(self, flags: rusqlite::OpenFlags, vfs: &str) -> Result<Connection,rusqlite::Error> {
+        self.open_with_flags_and_vfs(":memory:", flags, vfs).await
+    }
+}
+/// A handle which allows access to the underlying [`rusqlite::Connection`]
+/// via [`Connection::call()`].
+#[derive(Debug, Clone)]
+pub struct Connection {
+    // None if connection is closed, else Some(connection).
+    conn: Asyncified<Option<rusqlite::Connection>>
+}
+
+impl Connection {
+    /// Open a new connection to an SQLite database. If a database does not exist at the
+    /// path, one is created. Shorthand for `Connection::builder().open(path).await`.
+    ///
+    /// # Failure
+    ///
+    /// Will return `Err` if `path` cannot be converted to a C-compatible string
+    /// or if the underlying SQLite open call fails.
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Connection,rusqlite::Error> {
+        Self::builder().open(path).await
+    }
+
+    /// Open a new connection to an in-memory SQLite database. Shorthand for
+    /// `Connection::builder().open_in_memory().await`.
+    ///
+    /// # Failure
+    ///
+    /// Will return `Err` if the underlying SQLite open call fails.
+    pub async fn open_in_memory() -> Result<Connection,rusqlite::Error> {
+        Self::builder().open_in_memory().await
+    }
+
+    /// Configure and build a new connection.
+    pub fn builder() -> ConnectionBuilder {
+        ConnectionBuilder::new()
     }
 
     /// Close the SQLite connection.
@@ -347,5 +422,20 @@ mod test {
             .expect_err("should error");
 
         assert_eq!(err, MyErr::AlreadyClosed);
+    }
+
+    #[tokio::test]
+    async fn close_fn_called_on_drop() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let conn = Connection::builder()
+            .on_close(move |db| { let _ = tx.send(db); })
+            .open_in_memory()
+            .await
+            .unwrap();
+
+        drop(conn);
+
+        let db = rx.await.unwrap();
+        assert!(db.is_some());
     }
 }
