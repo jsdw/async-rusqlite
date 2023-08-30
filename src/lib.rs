@@ -435,6 +435,7 @@ mod test {
 
         drop(conn);
 
+        // This will wait forever if the close fn isn't called:
         let db = rx.await.unwrap();
         assert!(db.is_some());
     }
