@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 readme = "README.md"
 description = "A tiny executor agnostic wrapper around rusqlite to make calls to it async"
+repository = "https://github.com/jsdw/async-rusqlite"
 
 [dependencies]
 asyncified = "0.6.1"
