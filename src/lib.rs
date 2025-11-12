@@ -146,16 +146,19 @@ impl ConnectionBuilder {
     ///
     /// Will return `Err` if either `path` or `vfs` cannot be converted to a
     /// C-compatible string or if the underlying SQLite open call fails.
-    pub async fn open_with_flags_and_vfs<P: AsRef<Path>>(
+    pub async fn open_with_flags_and_vfs<P: AsRef<Path>, V: IntoName>(
         self,
         path: P,
         flags: rusqlite::OpenFlags,
-        vfs: &str,
+        vfs: impl Into<V>,
     ) -> Result<Connection,rusqlite::Error> {
         let path = path.as_ref().to_owned();
-        let vfs = vfs.to_owned();
+        let vfs = vfs.into();
         let conn = self.asyncified_builder
-            .build(move || rusqlite::Connection::open_with_flags_and_vfs(path, flags, &vfs).map(Some))
+            .build(move || {
+                let vfs = vfs.into_name();
+                rusqlite::Connection::open_with_flags_and_vfs(path, flags, vfs).map(Some)
+            })
             .await?;
         Ok(Connection { conn })
     }
@@ -182,7 +185,7 @@ impl ConnectionBuilder {
     ///
     /// Will return `Err` if `vfs` cannot be converted to a C-compatible
     /// string or if the underlying SQLite open call fails.
-    pub async fn open_in_memory_with_flags_and_vfs(self, flags: rusqlite::OpenFlags, vfs: &str) -> Result<Connection,rusqlite::Error> {
+    pub async fn open_in_memory_with_flags_and_vfs<V: IntoName>(self, flags: rusqlite::OpenFlags, vfs: impl Into<V>) -> Result<Connection,rusqlite::Error> {
         self.open_with_flags_and_vfs(":memory:", flags, vfs).await
     }
 }
@@ -330,6 +333,23 @@ impl From<AlreadyClosed> for Error {
         Error::AlreadyClosed
     }
 }
+
+
+pub trait IntoName: Send + 'static {
+    fn into_name(&self) -> impl rusqlite::Name;
+}
+
+impl IntoName for String {
+    fn into_name(&self) -> impl rusqlite::Name {
+        self.as_ref() as &str
+    }
+}
+impl IntoName for std::ffi::CString {
+    fn into_name(&self) -> impl rusqlite::Name {
+        self.as_ref() as &std::ffi::CStr
+    }
+}
+
 
 #[cfg(test)]
 mod test {
