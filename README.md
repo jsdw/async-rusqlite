@@ -1,5 +1,10 @@
 # async-rusqlite
 
+[![Crates.io](https://img.shields.io/crates/v/async-rusqlite.svg)](https://crates.io/crates/async-rusqlite)
+[![Docs.rs](https://docs.rs/async-rusqlite/badge.svg)](https://docs.rs/async-rusqlite)
+[![CI](https://github.com/jsdw/async-rusqlite/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jsdw/async-rusqlite/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/crates/l/async-rusqlite.svg)](LICENSE)
+
 A tiny, executor agnostic library for using `rusqlite` in async contexts. This essentially just spawns an `rusqlite` onto a long lived thread and sends closures to that thread to operate on it.
 
 This library is inspired by `tokio-rusqlite`, but with the following design differences:
