@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Rename the small `IntoName` trait to `AsName` to better reflect what it is doing.
+- Update to latest `rusqlite` (0.41.0) and `asyncified` (0.7.0).
+- Move to the 2024 edition.
+
 ## 0.5.0
 
 - Update to latest `rusqlite` (0.37.0).

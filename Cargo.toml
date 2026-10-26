@@ -1,15 +1,15 @@
 [package]
 name = "async-rusqlite"
-version = "0.5.0"
-edition = "2021"
+version = "0.6.0"
+edition = "2024"
 license = "MIT"
 readme = "README.md"
 description = "A tiny executor agnostic wrapper around rusqlite to make calls to it async"
 repository = "https://github.com/jsdw/async-rusqlite"
 
 [dependencies]
-asyncified = "0.6.2"
-rusqlite = "0.37.0"
+asyncified = "0.7.0"
+rusqlite = "0.41.0"
 
 [dev-dependencies]
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }
